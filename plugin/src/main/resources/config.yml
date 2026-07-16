@@ -1,0 +1,69 @@
+# Meme — server configuration.
+#
+# Emote assets live in plugins/Meme/emotes/:
+#   gifs/     — one image per emote: .gif, .png or .jpg (the file name is the emote id:
+#               hello.gif -> /meme hello; on a name clash the .gif wins)
+#   bubbles/  — speech-bubble images, .png (or .jpg — but jpg has no transparency, so png is
+#               recommended). default-bubble below; a per-emote override is <id>.png or the
+#               'bubble' key in emotes.yml. Every image here is also offered in the bubble picker.
+#   sounds/   — .ogg (Vorbis!) sounds (auto-attached when named <id>.ogg, or via the 'sound' key).
+#               An .ogg NOT attached to any image becomes its own SOUND-ONLY emote: clients show
+#               its name as text in the bubble (or on a white plate when there is no bubble).
+#   packs/    — whole emote packs as .zip files (the same gifs/bubbles/sounds folders inside the
+#               zip; bubbles/default.png applies to every emote of the pack). Drop a zip in, reload,
+#               done — delete the zip to remove its emotes. Loose files above win id clashes.
+#               The starter pack lands here as meme-pack.zip on the very first run.
+# Per-emote tuning (price, access, placement, sound volume...) lives in emotes.yml.
+# Clients download everything automatically on join — no resource pack, no manual installs.
+
+# How far (blocks) other players see/hear an emote.
+visible-range: 96
+
+# Asset streaming: how many chunks (~28 KB each) are sent to one player per tick.
+# 10 ≈ 5.5 MB/s per downloading player.
+chunks-per-tick: 10
+
+# Files bigger than this are skipped with a console warning (keep GIFs lean!).
+max-asset-mb: 8
+
+# Seconds between emote plays per player (anti-spam).
+cooldown-seconds: 2
+
+# Player-pack emotes: when true, players may show emotes from their OWN client-side packs
+# (<клиент>/meme/emotes/). The server stores/uploads NOTHING — it only relays the emote
+# description + SHA-1 content hashes, and a viewer sees the emote only if they have the same
+# files locally. Server emotes above keep working regardless of this switch.
+# Toggle live in game: /memes playeremotes on|off
+player-emotes: false
+
+# Selectable speech bubbles: when true, players pick which speech bubble rides with THEIR emotes, from
+# every bubble image the server offers (loose emotes/bubbles/ + every pack). Independent of player-emotes.
+# A "No bubble" option lets them show emotes with no frame. Set false to disable the picker and force the
+# one bubble each emote already carries (default-bubble / its own <id>.png).
+bubble-choice: true
+
+# Fallback speech-bubble for emotes without their own <id>.png. Just a FILE NAME: it is looked up in
+# the same place the emote's assets live — emotes/bubbles/ for loose emotes, or the bubbles/ folder
+# INSIDE a pack zip for pack emotes. Leave it empty (default-bubble: "") to give bubble-less emotes NO
+# bubble at all; a name that isn't found also means no bubble (never a hidden fallback).
+default-bubble: default.png
+
+# Where emote prices are charged from:
+#   vault            — the server's main economy as registered in Vault (default). WHICH currency that
+#                      is belongs to your economy plugin (ExcellentEconomy: its config.yml ->
+#                      Integration.Vault.EconomyCurrency).
+#   excellenteconomy — one specific ExcellentEconomy currency, independent of Vault: set
+#                      economy-currency below.
+#   essentials       — EssentialsX money, hooked directly (even when Vault points at another economy).
+#   playerpoints     — PlayerPoints points (integer: fractional prices are rounded up).
+# A missing plugin/currency or an unknown value DISABLES purchases (prices still shown) with a console
+# warning — nothing silently falls back to a currency you did not pick. Applies live on /memes reload.
+economy: vault
+
+# Only for economy: excellenteconomy — the currency id, i.e. the file name from
+# plugins/ExcellentEconomy/currencies/ without .yml (money, coins, токены...).
+economy-currency: ''
+
+# Currency name used while NO economy is hooked (prices then display but nothing is purchasable
+# until an economy provider exists).
+currency-name: Coins

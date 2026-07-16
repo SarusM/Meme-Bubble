@@ -1,0 +1,47 @@
+# Meme — per-emote configuration.
+#
+# EVERY image (.gif/.png/.jpg) inside plugins/Meme/emotes/gifs/ automatically becomes an emote
+# (id = file name without the extension, lowercased; a .gif wins a name clash), and every .ogg inside
+# emotes/sounds/ NOT attached to an image becomes a SOUND-ONLY emote (its name shows as text in the
+# bubble). A section here is only needed to CUSTOMISE one. All keys are optional.
+#
+# Value layering (most specific wins):
+#   built-in hardcoded values  <  the 'defaults:' section below  <  the emote's own section.
+# So with defaults.scale: 1.2 and emotes.hello.scale: 1.5, 'hello' gets 1.5, everything else 1.2.
+#
+# defaults:                    # optional server-wide baseline for EVERY emote (same keys as an emote,
+#   scale: 1.2                 # except 'name'/'gif'/'bubble'/'sound' which are per-emote by nature;
+#   anchor: 1.15               # the default bubble file is 'default-bubble' in config.yml)
+#   offset: {x: 0.0, y: 0.25, z: 0.0}
+#   gif-scale: 1.0
+#   gif-offset: {x: 0, y: 0}
+#   sound-volume: 1.0
+#   sound-pitch: 1.0
+#   sound-range: 32
+#   loops: 1.0
+#   price: 0
+#   default-access: true
+#
+# In-game equivalent: /memes set defaults <param> <value>  (and /memes set <emote> <param> <value>).
+#
+# emotes:
+#   hello:                     # the id (= hello.gif)
+#     name: "Hello!"           # display name in the client panel
+#     gif: hello.gif           # explicit gif file (defaults to <id>.gif)
+#     bubble: speechbubble.png # bubble PNG in emotes/bubbles/ ('' = no bubble; default: <id>.png if it exists, else config.yml default-bubble)
+#     sound: hello.ogg         # OGG-Vorbis in emotes/sounds/ (default: <id>.ogg if it exists, else silent)
+#     price: 0                 # cost in the server currency; 0 = free
+#     default-access: true     # everyone may use it (false = must buy / be granted / have meme.emote.<id>)
+#                              # NOTE: when price > 0 this defaults to false
+#     scale: 1.2               # bubble height in blocks
+#     anchor: 1.15             # bubble bottom = player height x anchor above the feet
+#     offset: {x: 0.0, y: 0.25, z: 0.0}   # extra offset (right / up / toward camera), blocks
+#     gif-scale: 1.0           # gif size inside the bubble (x the largest fit)
+#     gif-offset: {x: 0, y: 0} # gif seat offset in bubble-texture pixels
+#     sound-volume: 1.0
+#     sound-pitch: 1.0
+#     sound-range: 32          # audible range in blocks
+#     loops: 1.0               # emote lasts N cycles: a GIF animation cycle, else the sound's length,
+#                              # else 3 s (static image without sound); 0 = until stopped
+
+emotes: {}

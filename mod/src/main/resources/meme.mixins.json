@@ -1,0 +1,11 @@
+{
+  "required": true,
+  "package": "io.github.sarusm.meme.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "SoundBufferLibraryMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

@@ -1,0 +1,28 @@
+name: Meme
+version: '${version}'
+main: io.github.sarusm.meme.MemePlugin
+api-version: '1.21'
+author: SarusM
+description: Server-driven GIF emote speech bubbles with sound, shop and per-emote access. Clients need the Meme Fabric mod.
+softdepend: [Vault, ExcellentEconomy, Essentials, PlayerPoints]
+
+commands:
+  meme:
+    description: Play one of the server's emotes over your head (requires the Meme client mod to see them).
+    usage: /meme <id> | /meme stop
+    permission: meme.use
+  memes:
+    description: Meme admin - reload, mute, grant, price.
+    usage: /memes reload|list|info|mute|unmute|grant|revoke|price|stopall
+    permission: meme.admin
+
+permissions:
+  meme.use:
+    description: Play emotes (command and client panel).
+    default: true
+  meme.admin:
+    description: Manage emotes (mute players, grant access, set prices, reload).
+    default: op
+  meme.emote.*:
+    description: Access to every emote regardless of price/default-access.
+    default: false

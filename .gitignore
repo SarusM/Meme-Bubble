@@ -1,0 +1,25 @@
+# Gradle
+**/.gradle/
+**/build/
+
+# Fabric Loom dev runtime (world saves, logs, downloaded natives of the dev client)
+mod/run/
+
+# IDEs
+.idea/
+*.iml
+.vscode/
+**/bin/
+**/.settings/
+**/.classpath
+**/.project
+
+# Python
+__pycache__/
+
+# Starter emote pack bundled into both jars at build time (84 MB of media — never committed).
+# Populate from the server: copy plugins/Meme/emotes/{gifs,sounds} + bubbles/default.png here.
+/pack/
+
+# Private dev notes — real paths, server setup, personal info. Never publish.
+CLAUDE.md

@@ -1,0 +1,64 @@
+plugins {
+    // 1.21.11 is obfuscated -> the '-remap' Loom variant (needs Loom 1.14+, Gradle 9.5+).
+    id 'net.fabricmc.fabric-loom-remap' version "${loom_version}"
+}
+
+version = project.mod_version
+group = project.mod_group_id
+
+base {
+    archivesName = project.mod_id
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    mappings loom.officialMojangMappings()
+
+    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+}
+
+// The wire protocol (opcodes + EmoteDef) is shared source with the Paper plugin: ../common.
+sourceSets.main.java.srcDir '../common/src/main/java'
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(21)
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 21
+}
+
+// The starter emote pack (repo-root pack/, untracked) rides inside the mod jar too: installed to
+// <gameDir>/meme/emotes/packs/ on first launch, so players have the assets pre-cached before
+// they ever join a server. The build still succeeds without pack/ — just no bundled pack inside.
+def packDir = file('../pack')
+tasks.register('bundlePack', Zip) {
+    onlyIf { packDir.directory }
+    from packDir
+    include 'gifs/**', 'bubbles/**', 'sounds/**'
+    archiveFileName = 'meme-pack.zip'
+    destinationDirectory = layout.buildDirectory.dir('generated/pack')
+    entryCompression = ZipEntryCompression.STORED // gif/ogg/png are already compressed
+    reproducibleFileOrder = true
+    preserveFileTimestamps = false
+}
+
+processResources {
+    def expandProps = [
+            version          : project.mod_version,
+            mod_id           : project.mod_id,
+            mod_name         : project.mod_name,
+            mod_description  : project.mod_description,
+            mod_license      : project.mod_license,
+            mod_authors      : project.mod_authors,
+            minecraft_version: project.minecraft_version,
+            loader_version   : project.loader_version
+    ]
+    inputs.properties expandProps
+    filesMatching('fabric.mod.json') {
+        expand expandProps
+    }
+    from tasks.named('bundlePack')
+}

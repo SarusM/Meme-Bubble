@@ -1,0 +1,81 @@
+plugins {
+    id 'java'
+}
+
+group = 'io.github.sarusm.meme'
+version = '1.0.0'
+
+repositories {
+    mavenCentral()
+    // Paper API (the server in use is Paper 1.21.11).
+    maven { url = 'https://repo.papermc.io/repository/maven-public/' }
+    // VaultAPI (economy bridge) is published via JitPack.
+    maven { url = 'https://jitpack.io' }
+    // ExcellentEconomy + nightcore (NightExpress).
+    maven { url = 'https://repo.nightexpressdev.com/releases' }
+    // EssentialsX.
+    maven { url = 'https://repo.essentialsx.net/releases/' }
+    // PlayerPoints (Rosewood).
+    maven { url = 'https://repo.rosewooddev.io/repository/public/' }
+}
+
+dependencies {
+    compileOnly 'io.papermc.paper:paper-api:1.21.11-R0.1-SNAPSHOT'
+    // Vault economy hook — optional at runtime (softdepend), never bundled. Its ancient org.bukkit
+    // transitive dep is excluded (paper-api provides the real Bukkit classes).
+    compileOnly('com.github.MilkBowl:VaultAPI:1.7.1') {
+        exclude group: 'org.bukkit'
+    }
+    // Direct economy hooks (the 'economy:' config key) — all optional at runtime, never bundled.
+    compileOnly 'su.nightexpress.excellenteconomy:ExcellentEconomy:2.8.0'
+    // ExcellentCurrency's supertypes live in nightcore — javac needs them to resolve its members.
+    // ('nightcore' itself is a parent POM; the classes are in the 'main' module artifact.)
+    compileOnly 'su.nightexpress.nightcore:main:2.16.3'
+    compileOnly('net.essentialsx:EssentialsX:2.21.2') {
+        transitive = false // we only touch its static Economy API; skip the huge dependency tree
+    }
+    compileOnly('org.black_ixx:playerpoints:3.3.5') {
+        transitive = false // the published jar is the shaded plugin — self-contained
+    }
+}
+
+// The wire protocol (opcodes + EmoteDef) is shared source with the Fabric mod: ../common.
+sourceSets.main.java.srcDir '../common/src/main/java'
+
+java {
+    // JDK 25: ExcellentEconomy ships Java-25 classfiles which javac 21 refuses to read. The emitted
+    // bytecode stays Java 21 via options.release below, so the plugin itself still runs on Java 21.
+    toolchain.languageVersion = JavaLanguageVersion.of(25)
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 21
+}
+
+// The starter emote pack (repo-root pack/: gifs/bubbles/sounds, ~84 MB, untracked — see .gitignore)
+// is zipped into the jar and installed to emotes/packs/ on the plugin's first run. Without pack/ the
+// build still succeeds, just with no bundled pack inside.
+def packDir = file('../pack')
+tasks.register('bundlePack', Zip) {
+    onlyIf { packDir.directory }
+    from packDir
+    include 'gifs/**', 'bubbles/**', 'sounds/**'
+    archiveFileName = 'meme-pack.zip'
+    destinationDirectory = layout.buildDirectory.dir('generated/pack')
+    entryCompression = ZipEntryCompression.STORED // gif/ogg/png are already compressed
+    reproducibleFileOrder = true
+    preserveFileTimestamps = false
+}
+
+processResources {
+    inputs.property 'version', project.version
+    filesMatching('plugin.yml') {
+        expand version: project.version
+    }
+    from tasks.named('bundlePack')
+}
+
+jar {
+    archiveBaseName = 'meme'
+}
