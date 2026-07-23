@@ -48,6 +48,13 @@ public final class ClientEmotes {
     private static final Map<String, EmoteDef> EMOTES = new LinkedHashMap<>();
     private static final Map<UUID, Active> ACTIVE = new HashMap<>();
     private static final Map<String, Partial> DOWNLOADS = new HashMap<>();
+    /**
+     * Notified after a CLIENT-SIDE-ONLY self play (an own-pack emote the server can't serve or relay) —
+     * the hook addons (e.g. Meme Flashback, which records such plays into replays) subscribe to.
+     * The def passed is already the played copy (possibly with a missing sound stripped).
+     */
+    public static final List<java.util.function.BiConsumer<UUID, EmoteDef>> SELF_PLAY_LISTENERS =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
     private static boolean connected;
     /** This server allows emotes from the players' own local packs (S2C_PLAYER_EMOTES). */
     private static boolean playerEmotesAllowed;
@@ -94,31 +101,31 @@ public final class ClientEmotes {
         return List.copyOf(EMOTES.values());
     }
 
-    /** The server def for the id, falling back to the player's own pack when the server allows it. */
+    /** The server def for the id, falling back to the player's own pack. */
     public static EmoteDef anyDef(String id) {
         EmoteDef def = EMOTES.get(id);
-        if (def == null && playerEmotesAllowed) {
+        if (def == null) {
             def = LocalEmotes.get(id);
         }
         return def;
     }
 
     /**
-     * The catalogue plus (when allowed) the player's own pack — skipping local emotes the server already
-     * offers (same id or same primary-asset content), so the grid never shows duplicates. The primary
-     * asset is the image, or the sound for sound-only emotes.
+     * The catalogue plus the player's own pack — skipping local emotes the server already offers (same id
+     * or same primary-asset content), so the grid never shows duplicates. The primary asset is the image,
+     * or the sound for sound-only emotes. Locals are ALWAYS listed (Round 9): when the server relays them
+     * ({@code player-emotes}) everyone sees the play, otherwise it falls back to a client-side-only play
+     * over the own player ({@link io.github.sarusm.meme.client.net.ClientNet#playAny}).
      */
     public static List<EmoteDef> allWithLocal() {
         List<EmoteDef> out = new ArrayList<>(EMOTES.values());
-        if (playerEmotesAllowed) {
-            Set<String> serverAssets = new HashSet<>();
-            for (EmoteDef def : EMOTES.values()) {
-                serverAssets.add(primaryHash(def));
-            }
-            for (EmoteDef local : LocalEmotes.all()) {
-                if (!EMOTES.containsKey(local.id) && !serverAssets.contains(primaryHash(local))) {
-                    out.add(local);
-                }
+        Set<String> serverAssets = new HashSet<>();
+        for (EmoteDef def : EMOTES.values()) {
+            serverAssets.add(primaryHash(def));
+        }
+        for (EmoteDef local : LocalEmotes.all()) {
+            if (!EMOTES.containsKey(local.id) && !serverAssets.contains(primaryHash(local))) {
+                out.add(local);
             }
         }
         return out;
@@ -179,6 +186,12 @@ public final class ClientEmotes {
      * ghost entry waiting for a download that will never come).
      */
     public static void startLocal(UUID player, EmoteDef def) {
+        startLocal(player, def, null);
+    }
+
+    /** {@code bubbleOverride}: like {@link #start} — used by the own client-side plays (Round 9), whose
+     *  bubble choice never went through a server rewrite. */
+    public static void startLocal(UUID player, EmoteDef def, String bubbleOverride) {
         boolean hasImage = AssetCache.has(def.gifHash);
         boolean hasSound = AssetCache.has(def.soundHash);
         if (def.gifHash.isEmpty() ? !hasSound : !hasImage) {
@@ -187,7 +200,7 @@ public final class ClientEmotes {
         if (!hasSound) {
             def.soundHash = ""; // will never arrive — don't let the lifetime logic wait on it
         }
-        ACTIVE.put(player, new Active(def.id, def, null, System.currentTimeMillis()));
+        ACTIVE.put(player, new Active(def.id, def, bubbleOverride, System.currentTimeMillis()));
         if (!def.soundHash.isEmpty()) {
             EmoteSounds.play(player, def);
         }

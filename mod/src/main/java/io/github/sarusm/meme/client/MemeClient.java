@@ -50,12 +50,10 @@ public class MemeClient implements ClientModInitializer {
         ClientPrefs.load();
 
         // First launch: unpack the bundled starter pack, then pre-import all local packs off-thread —
-        // a fresh pack is ~84 MB of hashing + cache writes, and the join-time rescan (render thread)
-        // must hit a warm memo instead of doing that work itself.
+        // a fresh pack is ~84 MB of hashing + cache writes. Every later rescan (join, panel open,
+        // refresh) goes through the same background scan thread, so none of it can stall a frame.
         LocalEmotes.installBundledPack();
-        Thread prewarm = new Thread(LocalEmotes::rescan, "meme-pack-prewarm");
-        prewarm.setDaemon(true);
-        prewarm.start();
+        LocalEmotes.rescanAsync();
 
         PayloadTypeRegistry.playS2C().register(EmotesPayload.TYPE, EmotesPayload.STREAM_CODEC);
         PayloadTypeRegistry.playC2S().register(EmotesPayload.TYPE, EmotesPayload.STREAM_CODEC);
@@ -65,7 +63,7 @@ public class MemeClient implements ClientModInitializer {
 
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
             ClientNet.reset();
-            LocalEmotes.rescan(); // the player's own pack, ready in case this server allows it
+            LocalEmotes.rescanAsync(); // the player's own pack, ready in case this server allows it
             joinTicks = 0;
             ClientNet.hello(); // no-op on servers without the plugin (unknown channels are ignored)
         });
@@ -119,9 +117,10 @@ public class MemeClient implements ClientModInitializer {
         }
     }
 
-    /** Per-emote hotkeys ({@link ClientPrefs#hotkeys()}): play on key-down edge, only in-game. */
+    /** Per-emote hotkeys ({@link ClientPrefs#hotkeys()}): play on key-down edge, only in-game.
+     *  No connected() gate (Round 9): playAny falls back to a client-side own-pack play anywhere. */
     private static void tickHotkeys(Minecraft client) {
-        if (client.screen != null || !ClientEmotes.connected()) {
+        if (client.screen != null) {
             return;
         }
         for (Map.Entry<String, Integer> entry : ClientPrefs.hotkeys().entrySet()) {

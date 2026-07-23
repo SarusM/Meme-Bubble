@@ -3,10 +3,10 @@ package io.github.sarusm.meme.client.gui;
 import java.util.ArrayList;
 import java.util.List;
 
-import io.github.sarusm.meme.client.AssetCache;
 import io.github.sarusm.meme.client.ClientEmotes;
 import io.github.sarusm.meme.client.ClientPrefs;
 import io.github.sarusm.meme.client.EmoteTextures;
+import io.github.sarusm.meme.client.LocalEmotes;
 import io.github.sarusm.meme.client.net.ClientNet;
 import io.github.sarusm.meme.common.EmoteProto;
 
@@ -19,14 +19,16 @@ import net.minecraft.network.chat.Component;
 
 /**
  * The speech-bubble picker ("My Bubble" in the G panel): the player chooses which bubble rides with THEIR
- * emotes, from the server's catalogue ({@link ClientEmotes#bubbles()}) plus two special cells — "Default"
- * (no override, each emote keeps its own bubble) and "No bubble" (draw no bubble). The pick is global
- * across servers ({@link ClientPrefs#bubble()}) and pushed to the server ({@link ClientNet#setBubble}),
- * which applies it to the player's plays. Shown only when the server enables the choice.
+ * emotes — two special cells ("Default" = each emote keeps its own bubble, "No bubble"), the server's
+ * catalogue ({@link ClientEmotes#bubbles()}, when that server enables the choice) and — always — the
+ * player's OWN bubbles ({@link LocalEmotes#bubbles()}, cyan strip). The pick is global across servers
+ * ({@link ClientPrefs#bubble()}) and pushed to the server ({@link ClientNet#setBubble}) which applies it
+ * to relayed/server plays it can validate; client-side plays (Round 9) apply it directly, so own-pack
+ * bubbles work everywhere including offline.
  */
 public class BubbleScreen extends Screen {
     /** One picker cell: {@code choice} is the wire value ("" default / "none" / a catalogue hash). */
-    private record Option(String choice, String label, String bubbleHash) {
+    private record Option(String choice, String label, String bubbleHash, boolean local) {
     }
 
     private static final int CELL = 72;
@@ -47,11 +49,21 @@ public class BubbleScreen extends Screen {
     protected void init() {
         options.clear();
         options.add(new Option("",
-                Component.translatable("screen.meme.bubble.default").getString(), null)); // no override
+                Component.translatable("screen.meme.bubble.default").getString(), null, false));
         options.add(new Option(EmoteProto.BUBBLE_NONE,
-                Component.translatable("screen.meme.bubble.none").getString(), null));    // draw nothing
-        for (ClientEmotes.BubbleOption b : ClientEmotes.bubbles()) {
-            options.add(new Option(b.hash(), stripPng(b.name()), b.hash()));
+                Component.translatable("screen.meme.bubble.none").getString(), null, false));
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        if (ClientEmotes.bubbleChoiceEnabled()) {
+            for (ClientEmotes.BubbleOption b : ClientEmotes.bubbles()) {
+                if (seen.add(b.hash())) {
+                    options.add(new Option(b.hash(), stripPng(b.name()), b.hash(), false));
+                }
+            }
+        }
+        for (LocalEmotes.LocalBubble b : LocalEmotes.bubbles()) { // the player's own — always offered
+            if (seen.add(b.hash())) {
+                options.add(new Option(b.hash(), b.name(), b.hash(), true));
+            }
         }
 
         int top = 40;
@@ -96,12 +108,6 @@ public class BubbleScreen extends Screen {
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
         super.render(graphics, mouseX, mouseY, partialTick);
         graphics.drawCenteredString(this.font, this.title, this.width / 2, 16, 0xFFFFFFFF);
-        if (!ClientEmotes.bubbleChoiceEnabled()) {
-            graphics.drawCenteredString(this.font,
-                    Component.translatable("screen.meme.bubble.disabled").getString(),
-                    this.width / 2, gridY + 8, 0xFFFF8888);
-            return;
-        }
         String current = ClientPrefs.bubble();
         for (int i = 0; i < options.size(); i++) {
             Option opt = options.get(i);
@@ -112,6 +118,9 @@ public class BubbleScreen extends Screen {
             graphics.fill(x, y, x + CELL, y + CELL, selected ? 0xFF3A6EA5 : (hover ? 0x66FFFFFF : 0x44000000));
             graphics.renderOutline(x, y, CELL, CELL, selected ? 0xFF8FD0FF : 0x66FFFFFF);
             drawPreview(graphics, opt, x, y);
+            if (opt.local()) {
+                graphics.fill(x, y, x + CELL, y + 3, 0xFF00AACC); // cyan strip = the player's own pack
+            }
             graphics.drawCenteredString(this.font, this.font.plainSubstrByWidth(opt.label(), CELL - 4),
                     x + CELL / 2, y + CELL - 11, 0xFFFFFFFF);
         }
@@ -127,7 +136,8 @@ public class BubbleScreen extends Screen {
         }
         EmoteTextures.Bubble bubble = EmoteTextures.bubble(opt.bubbleHash());
         if (bubble == null) {
-            graphics.drawCenteredString(this.font, AssetCache.has(opt.bubbleHash()) ? "!" : "…",
+            // "!" only for a real decode failure — while downloading OR background-decoding it's "…".
+            graphics.drawCenteredString(this.font, EmoteTextures.failed(opt.bubbleHash()) ? "!" : "…",
                     x + CELL / 2, y + area / 2 - 4, 0xFFAAAAAA);
             return;
         }

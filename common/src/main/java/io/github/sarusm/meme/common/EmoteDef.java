@@ -70,6 +70,20 @@ public final class EmoteDef {
      */
     public float loops = 1.0f;
 
+    /**
+     * A field-for-field copy via the wire round-trip — automatically covers every serialised field, so
+     * new fields can never be forgotten. Use before any mutation of a def shared with a catalogue/pack map.
+     */
+    public EmoteDef copy() {
+        try {
+            java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream(256);
+            write(new java.io.DataOutputStream(bytes));
+            return read(new java.io.DataInputStream(new java.io.ByteArrayInputStream(bytes.toByteArray())));
+        } catch (IOException e) {
+            throw new java.io.UncheckedIOException(e); // in-memory streams cannot actually throw
+        }
+    }
+
     public void write(DataOutput out) throws IOException {
         out.writeUTF(id);
         out.writeUTF(name);

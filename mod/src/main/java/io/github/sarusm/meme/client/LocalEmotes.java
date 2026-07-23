@@ -14,6 +14,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -58,7 +60,21 @@ public final class LocalEmotes {
     /** Signature of the last scan result — revision only bumps when the set actually changed. */
     private static String lastSignature = "";
 
+    /** All rescans run here: a fresh pack is ~84 MB of hashing, and even a cheap memoised scan can block
+     *  behind a running one on the {@code synchronized} — never acceptable on the render thread. */
+    private static final ExecutorService SCANNER = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "meme-pack-scan");
+        t.setDaemon(true);
+        return t;
+    });
+
     private LocalEmotes() {
+    }
+
+    /** {@link #rescan()} on the background scan thread — the render thread's only way in. The catalogue
+     *  revision bump lands when the scan finishes, so an open panel rebuilds by itself. */
+    public static void rescanAsync() {
+        SCANNER.execute(LocalEmotes::rescan);
     }
 
     public static Path dir() {
@@ -102,6 +118,42 @@ public final class LocalEmotes {
 
     public static List<EmoteDef> all() {
         return List.copyOf(emotes.values());
+    }
+
+    /** One bubble of the player's own pack, importable into the picker ({@code BubbleScreen}). */
+    public record LocalBubble(String hash, String name) {
+    }
+
+    /**
+     * Every bubble image the player owns, imported into the {@link AssetCache}: ALL loose files in
+     * {@code emotes/bubbles/} (not just the ones an emote references — labeled by file name) plus the
+     * bubbles baked into pack emotes (labeled by emote id). Deduped by content hash.
+     */
+    public static synchronized List<LocalBubble> bubbles() {
+        Map<String, LocalBubble> byHash = new LinkedHashMap<>();
+        Path bubbles = dir().resolve("bubbles");
+        if (Files.isDirectory(bubbles)) { // first launch: no folders until the first rescan
+            for (String glob : new String[] {"*.png", "*.jpg", "*.jpeg"}) {
+                try (DirectoryStream<Path> stream = Files.newDirectoryStream(bubbles, glob)) {
+                    for (Path file : stream) {
+                        FileSig sig = imported(file);
+                        if (sig != null) {
+                            String fileName = file.getFileName().toString();
+                            byHash.putIfAbsent(sig.hash(), new LocalBubble(sig.hash(),
+                                    fileName.substring(0, fileName.lastIndexOf('.'))));
+                        }
+                    }
+                } catch (IOException e) {
+                    MemeClient.LOGGER.warn("Could not scan the local bubbles folder", e);
+                }
+            }
+        }
+        for (EmoteDef def : emotes.values()) {
+            if (!def.bubbleHash.isEmpty() && AssetCache.has(def.bubbleHash)) {
+                byHash.putIfAbsent(def.bubbleHash, new LocalBubble(def.bubbleHash, def.id));
+            }
+        }
+        return List.copyOf(byHash.values());
     }
 
     /** Re-scan the pack folders (cheap when nothing changed) and bump the catalogue revision on changes. */

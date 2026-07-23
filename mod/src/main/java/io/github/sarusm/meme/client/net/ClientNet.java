@@ -205,22 +205,53 @@ public final class ClientNet {
     }
 
     /**
-     * Play by id from wherever it lives: the server catalogue wins, otherwise the player's own pack
-     * (when this server allows it). Unknown ids are ignored — used by hotkeys and the wheel, whose
-     * bindings are global across servers.
+     * Play by id from wherever it lives: the server catalogue wins; then the player's own pack — relayed
+     * through the server when it allows {@code player-emotes}, otherwise shown CLIENT-SIDE ONLY over the
+     * own player (works on any server and in singleplayer; only this client sees it). Unknown ids are
+     * ignored — used by hotkeys and the wheel, whose bindings are global across servers.
      */
     public static void playAny(String emoteId) {
-        if (ClientEmotes.def(emoteId) != null) {
+        if (ClientEmotes.connected() && ClientEmotes.def(emoteId) != null) {
             play(emoteId);
             return;
         }
-        EmoteDef local = ClientEmotes.playerEmotesAllowed() ? LocalEmotes.get(emoteId) : null;
-        if (local != null) {
+        EmoteDef local = LocalEmotes.get(emoteId);
+        if (local == null) {
+            return;
+        }
+        if (ClientEmotes.connected() && ClientEmotes.playerEmotesAllowed()) {
             playLocal(local);
+            return;
+        }
+        playSelfLocal(local);
+    }
+
+    /**
+     * The client-side-only fallback: the emote shows over the OWN player for THIS client, no server
+     * involved. Notifies {@link ClientEmotes#SELF_PLAY_LISTENERS} (the Flashback addon records the play
+     * into the replay from there, so it survives into replays).
+     */
+    private static void playSelfLocal(EmoteDef local) {
+        var player = net.minecraft.client.Minecraft.getInstance().player;
+        if (player == null) {
+            return;
+        }
+        EmoteDef def = local.copy(); // startLocal may strip a missing sound — never mutate the pack's def
+        // The own bubble pick applies directly — no server rewrote the def for this play. A local-only
+        // bubble (from the player's own bubbles folder) works here even when no server would accept it.
+        String bubble = ClientPrefs.bubble();
+        ClientEmotes.startLocal(player.getUUID(), def, bubble.isEmpty() ? null : bubble);
+        for (var listener : ClientEmotes.SELF_PLAY_LISTENERS) {
+            listener.accept(player.getUUID(), def);
         }
     }
 
     public static void stopSelf() {
+        // Clear the own client-side play immediately; the server echoes a stop for relayed/server plays.
+        var player = net.minecraft.client.Minecraft.getInstance().player;
+        if (player != null) {
+            ClientEmotes.stop(player.getUUID());
+        }
         send(out -> out.writeByte(EmoteProto.C2S_STOP));
     }
 

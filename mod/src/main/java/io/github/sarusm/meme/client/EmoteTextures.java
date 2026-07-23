@@ -14,6 +14,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import javax.imageio.ImageIO;
 import javax.imageio.ImageReader;
@@ -36,6 +38,12 @@ import net.minecraft.resources.Identifier;
  * magic bytes since cache files carry no extension). Loads lazily on first render (GPU device guaranteed up);
  * a broken file logs once and never crashes the frame. Content-hash keys mean entries never go stale, so
  * nothing is ever evicted within a session.
+ *
+ * <p>Decoding runs on a background daemon thread ({@link #DECODER}): {@link #gif}/{@link #bubble} return
+ * null while a hash is decoding — exactly like "still downloading" — and the finished frames hop back to
+ * the render thread (only there may GPU textures be created) via {@code Minecraft.execute}. Opening the
+ * panel therefore never freezes the game, however many GIFs the catalogue holds; thumbnails pop in as
+ * decodes complete. All public methods and all maps are render-thread only.
  *
  * <p>GIF decoding is the proven ClashBowlerMod pipeline: JDK ImageIO reader, frames composited honouring the
  * GIF disposal method (none / restoreToBackgroundColor / restoreToPrevious), downscaled to
@@ -99,12 +107,30 @@ public final class EmoteTextures {
     private static final Map<String, Gif> GIFS = new HashMap<>();
     /** Hashes that failed to decode — remembered so a broken file logs once instead of every frame. */
     private static final Set<String> FAILED = new HashSet<>();
+    /** Hashes currently decoding on {@link #DECODER} (render-thread only, like the maps above). */
+    private static final Set<String> PENDING = new HashSet<>();
+    /** One background decoder: gifs decode one at a time, so GPU uploads stagger across frames too. */
+    private static final ExecutorService DECODER = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "meme-image-decoder");
+        t.setDaemon(true);
+        return t;
+    });
+
+    /** All decoded frames of one image, produced off-thread — GPU registration happens later. */
+    private record DecodedImage(NativeImage[] frames, int[] delaysMs, int width, int height) {
+    }
 
     private EmoteTextures() {
     }
 
-    /** The bubble image by content hash, loading it on first use; null while not downloaded / broken.
-     *  Decoded via ImageIO (not {@link NativeImage#read}) so .jpg bubbles work alongside .png. */
+    /** True when this hash downloaded fine but failed to decode (the UI's "!" — distinct from decoding). */
+    public static boolean failed(String hash) {
+        return FAILED.contains(hash);
+    }
+
+    /** The bubble image by content hash; null while not downloaded / decoding / broken. The first call
+     *  schedules a background decode — never blocks the frame. Decoded via ImageIO (not
+     *  {@link NativeImage#read}) so .jpg bubbles work alongside .png. */
     public static Bubble bubble(String hash) {
         if (hash.isEmpty() || FAILED.contains(hash)) {
             return null;
@@ -113,27 +139,38 @@ public final class EmoteTextures {
         if (cached != null) {
             return cached;
         }
-        if (!AssetCache.has(hash)) {
-            return null; // still downloading
+        if (!AssetCache.has(hash) || !PENDING.add(hash)) {
+            return null; // still downloading, or already decoding in the background
         }
-        try (InputStream in = Files.newInputStream(AssetCache.path(hash))) {
-            BufferedImage decoded = ImageIO.read(in);
-            if (decoded == null) {
-                throw new IOException("unsupported image format");
+        Path file = AssetCache.path(hash);
+        DECODER.execute(() -> {
+            try {
+                NativeImage image;
+                try (InputStream in = Files.newInputStream(file)) {
+                    BufferedImage decoded = ImageIO.read(in);
+                    if (decoded == null) {
+                        throw new IOException("unsupported image format");
+                    }
+                    image = toNativeImage(decoded);
+                }
+                Minecraft.getInstance().execute(() -> {
+                    PENDING.remove(hash);
+                    Identifier id = register("emotes/bubble/" + hash,
+                            new DynamicTexture(() -> "meme bubble " + hash, image));
+                    BUBBLES.put(hash, new Bubble(id, image.getWidth(), image.getHeight()));
+                });
+            } catch (Exception e) {
+                Minecraft.getInstance().execute(() -> {
+                    PENDING.remove(hash);
+                    fail(hash, "Failed to load speech bubble " + hash, e);
+                });
             }
-            NativeImage image = toNativeImage(decoded);
-            Identifier id = register("emotes/bubble/" + hash,
-                    new DynamicTexture(() -> "meme bubble " + hash, image));
-            Bubble bubble = new Bubble(id, image.getWidth(), image.getHeight());
-            BUBBLES.put(hash, bubble);
-            return bubble;
-        } catch (IOException e) {
-            fail(hash, "Failed to load speech bubble " + hash, e);
-            return null;
-        }
+        });
+        return null;
     }
 
-    /** The decoded GIF by content hash, loading it on first use; null while not downloaded / broken. */
+    /** The decoded GIF by content hash; null while not downloaded / decoding / broken. The first call
+     *  schedules a background decode — never blocks the frame. */
     public static Gif gif(String hash) {
         if (hash.isEmpty() || FAILED.contains(hash)) {
             return null;
@@ -142,21 +179,42 @@ public final class EmoteTextures {
         if (cached != null) {
             return cached;
         }
-        if (!AssetCache.has(hash)) {
-            return null; // still downloading
+        if (!AssetCache.has(hash) || !PENDING.add(hash)) {
+            return null; // still downloading, or already decoding in the background
         }
-        try {
-            Gif gif = loadImage(hash, AssetCache.path(hash));
-            GIFS.put(hash, gif);
-            return gif;
-        } catch (Exception e) {
-            fail(hash, "Failed to decode emote image " + hash, e);
-            return null;
+        Path file = AssetCache.path(hash);
+        DECODER.execute(() -> {
+            try {
+                DecodedImage decoded = decodeImage(hash, file);
+                Minecraft.getInstance().execute(() -> {
+                    PENDING.remove(hash);
+                    GIFS.put(hash, registerFrames(hash, decoded));
+                });
+            } catch (Exception e) {
+                Minecraft.getInstance().execute(() -> {
+                    PENDING.remove(hash);
+                    fail(hash, "Failed to decode emote image " + hash, e);
+                });
+            }
+        });
+        return null;
+    }
+
+    /** Render thread: upload the decoded frames to the GPU, one {@link DynamicTexture} each. */
+    private static Gif registerFrames(String hash, DecodedImage decoded) {
+        NativeImage[] natives = decoded.frames();
+        Identifier[] frames = new Identifier[natives.length];
+        String texBase = "emotes/gif/" + hash + "/";
+        for (int i = 0; i < natives.length; i++) {
+            final int frameIndex = i;
+            frames[i] = register(texBase + i, new DynamicTexture(
+                    () -> "meme gif " + hash + " #" + frameIndex, natives[frameIndex]));
         }
+        return new Gif(frames, decoded.delaysMs(), decoded.width(), decoded.height());
     }
 
     /** Dispatch by content (files are cached by hash, extension unknown): GIF or a static PNG/JPG. */
-    private static Gif loadImage(String hash, Path file) throws IOException {
+    private static DecodedImage decodeImage(String hash, Path file) throws IOException {
         byte[] magic = new byte[3];
         try (InputStream in = Files.newInputStream(file)) {
             if (in.read(magic) < 3) {
@@ -170,7 +228,7 @@ public final class EmoteTextures {
     }
 
     /** A static PNG/JPG as a one-frame Gif — the whole render/thumbnail pipeline stays unchanged. */
-    private static Gif loadStill(String hash, Path file) throws IOException {
+    private static DecodedImage loadStill(String hash, Path file) throws IOException {
         BufferedImage img;
         try (InputStream in = Files.newInputStream(file)) {
             img = ImageIO.read(in);
@@ -182,11 +240,9 @@ public final class EmoteTextures {
         int outW = Math.max(1, (int) Math.round(img.getWidth() * scale));
         int outH = Math.max(1, (int) Math.round(img.getHeight() * scale));
         BufferedImage frame = scaled(img, outW, outH); // also converts any color model to ARGB
-        Identifier id = register("emotes/gif/" + hash + "/0", new DynamicTexture(
-                () -> "meme still " + hash, toNativeImage(frame)));
         MemeClient.LOGGER.info("Decoded emote image {} ({}x{} -> {}x{})",
                 hash, img.getWidth(), img.getHeight(), outW, outH);
-        return new Gif(new Identifier[] {id}, new int[] {100}, outW, outH);
+        return new DecodedImage(new NativeImage[] {toNativeImage(frame)}, new int[] {100}, outW, outH);
     }
 
     // ---------------------------------------------------------------------------------------------------------
@@ -197,7 +253,7 @@ public final class EmoteTextures {
     private record RawFrame(BufferedImage image, int x, int y, int delayMs, String disposal) {
     }
 
-    private static Gif loadGif(String hash, Path file) throws IOException {
+    private static DecodedImage loadGif(String hash, Path file) throws IOException {
         ImageReader reader = ImageIO.getImageReadersByFormatName("gif").next();
         List<RawFrame> raws = new ArrayList<>();
         int screenW = 1;
@@ -253,9 +309,8 @@ public final class EmoteTextures {
         // Composite frame-by-frame honouring the disposal method, snapshotting (and downscaling) each draw.
         BufferedImage canvas = new BufferedImage(screenW, screenH, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = canvas.createGraphics();
-        Identifier[] frames = new Identifier[raws.size()];
+        NativeImage[] frames = new NativeImage[raws.size()];
         int[] delays = new int[raws.size()];
-        String texBase = "emotes/gif/" + hash + "/";
         try {
             BufferedImage previous = null;
             for (int i = 0; i < raws.size(); i++) {
@@ -265,10 +320,7 @@ public final class EmoteTextures {
                 }
                 g.drawImage(raw.image(), raw.x(), raw.y(), null);
 
-                BufferedImage snapshot = scaled(canvas, outW, outH);
-                final int frameIndex = i;
-                frames[i] = register(texBase + i, new DynamicTexture(
-                        () -> "meme gif " + hash + " #" + frameIndex, toNativeImage(snapshot)));
+                frames[i] = toNativeImage(scaled(canvas, outW, outH));
                 delays[i] = raw.delayMs();
 
                 switch (raw.disposal()) {
@@ -292,7 +344,7 @@ public final class EmoteTextures {
         }
         MemeClient.LOGGER.info("Decoded emote gif {} ({} frames, {}x{} -> {}x{})",
                 hash, frames.length, screenW, screenH, outW, outH);
-        return new Gif(frames, delays, outW, outH);
+        return new DecodedImage(frames, delays, outW, outH);
     }
 
     private static int intAttr(Node node, String attr, int def) {

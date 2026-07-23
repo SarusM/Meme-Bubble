@@ -91,7 +91,7 @@ public class EmotesScreen extends Screen {
         if (!this.preselectId.isEmpty()) {
             this.selectedId = this.preselectId;
         }
-        LocalEmotes.rescan(); // pick up files dropped into the pack folder while the game runs
+        LocalEmotes.rescanAsync(); // pick up files dropped into the pack folder while the game runs
     }
 
     /** The selected/shown emote def: the server catalogue, or the player's own pack when allowed. */
@@ -204,18 +204,17 @@ public class EmotesScreen extends Screen {
         y += 24;
 
         this.addRenderableWidget(Button.builder(Component.translatable("screen.meme.refresh"), b -> {
-            LocalEmotes.rescan();
+            LocalEmotes.rescanAsync();
             ClientNet.hello();
         }).bounds(controlX, y, controlW, 20).build());
         y += 24;
 
-        // My speech bubble (only when the server enables the choice).
-        if (ClientEmotes.bubbleChoiceEnabled()) {
-            this.addRenderableWidget(Button.builder(Component.translatable("screen.meme.my_bubble"),
-                    b -> this.minecraft.setScreen(new BubbleScreen(this)))
-                    .bounds(controlX, y, controlW, 20).build());
-            y += 24;
-        }
+        // My speech bubble — always available (Round 10): the picker offers the player's OWN bubbles for
+        // client-side plays even offline; the server catalogue joins in when that server enables it.
+        this.addRenderableWidget(Button.builder(Component.translatable("screen.meme.my_bubble"),
+                b -> this.minecraft.setScreen(new BubbleScreen(this)))
+                .bounds(controlX, y, controlW, 20).build());
+        y += 24;
 
         // Quick-access wheel editor: a 3×3 grid filling ALL the space left under the buttons.
         int labelSpace = 14;
@@ -332,7 +331,9 @@ public class EmotesScreen extends Screen {
         long now = System.currentTimeMillis();
         List<EmoteDef> emotes = ClientEmotes.allWithLocal();
 
-        if (!ClientEmotes.connected()) {
+        if (!ClientEmotes.connected() && emotes.isEmpty()) {
+            // No plugin AND no own pack — nothing to show. With a local pack the grid works everywhere
+            // (client-side-only plays), so the red "no server" line only appears when truly empty.
             graphics.drawString(this.font, Component.translatable("screen.meme.no_server").getString(),
                     gridX + 4, gridY + 8, 0xFFFF8888);
         } else if (emotes.isEmpty()) {
@@ -404,7 +405,8 @@ public class EmotesScreen extends Screen {
         }
         EmoteTextures.Gif gif = EmoteTextures.gif(def.gifHash);
         if (gif == null) {
-            graphics.drawCenteredString(this.font, AssetCache.has(def.gifHash) ? "!" : "…",
+            // "!" only for a real decode failure — while downloading OR background-decoding it's "…".
+            graphics.drawCenteredString(this.font, EmoteTextures.failed(def.gifHash) ? "!" : "…",
                     x + size / 2, y + size / 2 - 4, 0xFFAAAAAA);
             return;
         }
